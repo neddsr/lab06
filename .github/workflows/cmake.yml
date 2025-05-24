@@ -1,0 +1,23 @@
+name: auto_build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure CMake
+      run: cmake ${{github.workspace}} -B ${{github.workspace}}/build
+      
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build

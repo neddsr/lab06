@@ -1,0 +1,133 @@
+name: Cross-Platform Build
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup WiX (alternative method)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\WiX Toolset *\bin\candle.exe")) {
+            $url = "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
+            $tempFile = "$env:RUNNER_TEMP\wix.zip"
+            Invoke-WebRequest -Uri $url -OutFile $tempFile
+            New-Item -ItemType Directory -Path "C:\wix" -Force
+            Expand-Archive -Path $tempFile -DestinationPath "C:\wix"
+            echo "WIX_PATH=C:\wix" >> $env:GITHUB_ENV
+          } else {
+            $wixPath = (Get-Item "${env:ProgramFiles(x86)}\WiX Toolset *\bin").FullName
+            echo "WIX_PATH=$wixPath" >> $env:GITHUB_ENV
+          }
+      - name: Generate GUIDs
+        shell: pwsh
+        run: |
+          $ProductGuid = [guid]::NewGuid().ToString().ToUpper()
+          $UpgradeGuid = [guid]::NewGuid().ToString().ToUpper()
+          echo "WIX_PRODUCT_GUID=$ProductGuid" >> $env:GITHUB_ENV
+          echo "WIX_UPGRADE_GUID=$UpgradeGuid" >> $env:GITHUB_ENV
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          $env:Path += ";$env:WIX_PATH"
+          
+          cmake -B _build -G "Visual Studio 17 2022" `
+            -DCPACK_GENERATOR="NSIS;WIX;ZIP" `
+            -DCPACK_WIX_PRODUCT_GUID="$env:WIX_PRODUCT_GUID" `
+            -DCPACK_WIX_UPGRADE_GUID="$env:WIX_UPGRADE_GUID" `
+            -DCPACK_WIX_ARCHITECTURE="x64"
+          cmake --build _build --config Release
+      - name: Create packages
+        shell: pwsh
+        run: |
+          cd _build
+          mkdir _artifacts -Force
+          
+          cpack -G "NSIS" && move *.exe _artifacts
+          
+          cpack -G "WIX" && move *.msi _artifacts || echo "WiX package failed but continuing..."
+          
+          cpack -G "ZIP" && move *.zip _artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows_packages
+          path: _build/_artifacts/*
+          retention-days: 1
+
+  build_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: sudo apt-get install -y cmake build-essential rpm
+      
+      - name: Configure and build
+        run: |
+          cmake -B _build
+          cmake --build _build
+      
+      - name: Create packages
+        run: |
+          cd _build
+          mkdir -p _artifacts
+          cpack -G "DEB" && mv *.deb _artifacts/
+          cpack -G "RPM" && mv *.rpm _artifacts/
+          cpack -G "TGZ" && mv *.tar.gz _artifacts/
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux_packages
+          path: _build/_artifacts/*
+          retention-days: 1
+
+  build_mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure and build
+        run: |
+          cmake -B _build
+          cmake --build _build
+      
+      - name: Create packages
+        run: |
+          cd _build
+          mkdir -p _artifacts
+          cpack -G "DragNDrop" && mv *.dmg _artifacts/
+          cpack -G "ZIP" && mv *.zip _artifacts/
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac_packages
+          path: _build/_artifacts/*
+          retention-days: 1
+
+  create_release:
+    needs: [build_windows, build_linux, build_mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+    
+      - name: Create or Update Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          artifacts: |
+            artifacts/windows_packages/*
+            artifacts/linux_packages/*
+            artifacts/mac_packages/*
+          replaceExisting: true  
+          token: ${{ secrets.GITHUB_TOKEN }}
