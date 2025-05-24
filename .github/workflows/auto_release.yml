@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup WiX (alternative method)
+      - name: Setup WiX
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\WiX Toolset *\bin\candle.exe")) {
